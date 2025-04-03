@@ -175,4 +175,3 @@ public class DynamicPricingJob {
 		env.execute("Dynamic Pricing Job");
 	}
 }
-
