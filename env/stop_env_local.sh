@@ -20,4 +20,4 @@ pkill -f kafka.Kafka
 pkill -f zookeeper
 pkill -f org.apache.flink.runtime.dispatcher.StandaloneDispatcher
 
-echo "✅ All services stopped successfully!"
+echo "All services stopped successfully!"

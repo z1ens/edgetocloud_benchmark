@@ -21,4 +21,4 @@ echo "Starting Flink cluster..."
 bin/start-cluster.sh
 sleep 5  # Give time for Flink to initialize
 
-echo "✅ Environment setup complete!"
+echo "Environment setup complete!"
