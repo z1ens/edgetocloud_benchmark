@@ -1,0 +1,30 @@
+# macOS
+.DS_Store
+
+# JetBrains IDEs
+.idea/
+*.iml
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+.eggs/
+*.log
+
+# Notebooks
+.ipynb_checkpoints/
+
+# Java
+*.class
+target/
+out/
+
+# VSCode
+.vscode/
+
+# System files
+Thumbs.db
+Desktop.ini
