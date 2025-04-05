@@ -18,9 +18,13 @@ The pipeline ingests three streams:
 The pipeline performs the following steps:
 
 1. **Parse & Clean** incoming JSON events into POJOs (`RiderRequest`, `DriverStatus`, `TrafficInfo`).
-2. **Windowed Aggregation**: calculate rider demand and driver supply per region in time windows.
-3. **Join Demand & Supply**: produce `DemandSupply` objects for each location window.
-4. **Broadcast Traffic Info**: enrich `DemandSupply` with latest congestion level via broadcast state.
+2. **Real-time Pairwise Matching (Interval Join)**: Rider and Driver streams are key-partitioned by location and matched using `intervalJoin`,
+   allowing for fine-grained many-to-many matching within a configurable time range.
+3. **Event-Time Windowed Aggregation (Post-Join)**: The resulting `DemandSupply` records are grouped by location using a
+   `TumblingEventTimeWindow` to compute demand/supply counts over fixed intervals,
+   effectively compressing high-volume edge matches into summarized metrics at the cloud layer.
+4. **Broadcast Traffic Info**: Real-time `TrafficInfo` events are broadcast to all downstream subtasks,
+   and joined with the aggregated `DemandSupply` stream using broadcast state enrichment.
 5. **Price Calculation**: compute final price using the formula:
 
    ```
