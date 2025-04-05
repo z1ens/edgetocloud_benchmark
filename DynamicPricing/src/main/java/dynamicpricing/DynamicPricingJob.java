@@ -26,12 +26,15 @@ import org.apache.flink.api.java.tuple.Tuple2;
 import org.apache.flink.connector.kafka.source.KafkaSource;
 import org.apache.flink.connector.kafka.source.enumerator.initializer.OffsetsInitializer;
 import org.apache.flink.streaming.api.datastream.BroadcastStream;
-import org.apache.flink.streaming.api.windowing.time.Time;
+import org.apache.flink.streaming.api.datastream.SingleOutputStreamOperator;
+import org.apache.flink.streaming.api.functions.co.ProcessJoinFunction;
 import org.apache.flink.streaming.api.windowing.assigners.TumblingEventTimeWindows;
+import org.apache.flink.streaming.api.windowing.time.Time;
 import org.apache.flink.streaming.connectors.kafka.FlinkKafkaProducer;
 import org.apache.flink.api.java.utils.ParameterTool;
 import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
+import org.apache.flink.util.Collector;
 import org.apache.kafka.clients.producer.ProducerConfig;
 import java.time.Duration;
 import java.time.LocalTime;
@@ -40,11 +43,11 @@ import java.util.Properties;
 public class DynamicPricingJob {
 	public static void main(String[] args) throws Exception {
 		final StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
-		env.disableOperatorChaining();
+		env.disableOperatorChaining(); // if need to unchain the
 
 		ParameterTool parameters = ParameterTool.fromArgs(args);
 		String kafkaBrokers = parameters.get("bootstrap.servers", "localhost:9092");
-		int windowSizeSec = parameters.getInt("window-size", 30);
+		int windowSizeSec = parameters.getInt("window-size", 60);
 
 		// ==== Kafka Sources ====
 		KafkaSource<String> riderSource = KafkaSource.<String>builder()
@@ -77,7 +80,7 @@ public class DynamicPricingJob {
 		kafkaSinkProps.setProperty(ProducerConfig.ACKS_CONFIG, "1");
 
 		FlinkKafkaProducer<String> kafkaSink = new FlinkKafkaProducer<>(
-				"dynamic_price",
+				"dynamic-price",
 				new SimpleStringSchema(),
 				kafkaSinkProps);
 
@@ -118,32 +121,61 @@ public class DynamicPricingJob {
 				);
 
 
-		// ==== Demand and Supply Aggregation ====
-		DataStream<Tuple2<String, Long>> demandCount = riderStream
-				.map(r -> new Tuple2<>(r.getLocation(), 1L))
-				.returns(Types.TUPLE(Types.STRING, Types.LONG))
-				.keyBy(t -> t.f0)
-				.window(TumblingEventTimeWindows.of(Time.seconds(windowSizeSec)))
-				.reduce((a, b) -> new Tuple2<>(a.f0, a.f1 + b.f1));
+		// ==== Direct Rider & Driver Mapping ====
+		SingleOutputStreamOperator<Tuple2<String, Long>> riderEvents = riderStream
+				.map(r -> new Tuple2<>(r.getLocation(), r.getTimestamp()))
+				.returns(Types.TUPLE(Types.STRING, Types.LONG));
 
-		DataStream<Tuple2<String, Long>> supplyCount = driverStream
-				.map(d -> new Tuple2<>(d.getLocation(), 1L))
-				.returns(Types.TUPLE(Types.STRING, Types.LONG))
-				.keyBy(t -> t.f0)
-				.window(TumblingEventTimeWindows.of(Time.seconds(windowSizeSec)))
-				.reduce((a, b) -> new Tuple2<>(a.f0, a.f1 + b.f1));
+		SingleOutputStreamOperator<Tuple2<String, Long>> driverEvents = driverStream
+				.filter(DriverStatus::isAvailable)
+				.map(d -> new Tuple2<>(d.getLocation(), d.getTimestamp()))
+				.returns(Types.TUPLE(Types.STRING, Types.LONG));
 
-		// ==== Join Demand and Supply ====
-		DataStream<DemandSupply> demandSupplyStream = demandCount
-				.join(supplyCount)
-				.where(t -> t.f0)
-				.equalTo(t -> t.f0)
-				.window(TumblingEventTimeWindows.of(Time.seconds(windowSizeSec)))
-				.apply((Tuple2<String, Long> demand, Tuple2<String, Long> supply) -> {
-					long windowStart = System.currentTimeMillis();
-					long windowEnd = windowStart + windowSizeSec * 60 * 1000;
-					return new DemandSupply(demand.f0, windowStart, windowEnd, demand.f1, supply.f1);
+		// ==== Interval Join without Pre-Aggregation ====
+		DataStream<DemandSupply> demandSupplyStream = riderEvents
+				.keyBy(t -> t.f0)
+				.intervalJoin(driverEvents.keyBy(t -> t.f0))
+				.between(Time.seconds(-windowSizeSec), Time.seconds(windowSizeSec))
+				.process(new ProcessJoinFunction<Tuple2<String, Long>, Tuple2<String, Long>, DemandSupply>() {
+					@Override
+					public void processElement(Tuple2<String, Long> demand,
+											   Tuple2<String, Long> supply,
+											   Context ctx,
+											   Collector<DemandSupply> out) throws Exception {
+						long now = ctx.getTimestamp();
+						out.collect(new DemandSupply(
+								demand.f0,
+								now - windowSizeSec * 1000L,
+								now,
+								1L, // Each rider represents demand 1
+								1L  // Each driver represents supply 1
+						));
+					}
 				});
+
+		DataStream<DemandSupply> timestampedDemandSupply = demandSupplyStream
+				.assignTimestampsAndWatermarks(
+						WatermarkStrategy.<DemandSupply>forBoundedOutOfOrderness(Duration.ofSeconds(10))
+								.withTimestampAssigner((ds, ts) -> ds.getWindowEnd())
+								.withIdleness(Duration.ofSeconds(30))
+				);
+
+		// ==== Post-Join Aggregation by Location (Processing Time Window) ====
+		DataStream<DemandSupply> aggregatedDemandSupply = timestampedDemandSupply
+				.keyBy(DemandSupply::getLocation)
+				.window(TumblingEventTimeWindows.of(Time.seconds(10)))
+				.reduce(
+						(a, b) -> new DemandSupply(
+								a.getLocation(),
+								Math.min(a.getWindowStart(), b.getWindowStart()),
+								Math.max(a.getWindowEnd(), b.getWindowEnd()),
+								a.getDemandCount() + b.getDemandCount(),
+								a.getSupplyCount() + b.getSupplyCount()
+						)
+				);
+
+
+
 
 		// ==== Broadcast Traffic and Enrich ====
 		MapStateDescriptor<String, Integer> trafficStateDescriptor =
@@ -151,9 +183,10 @@ public class DynamicPricingJob {
 
 		BroadcastStream<TrafficInfo> trafficBroadcast = trafficStream.broadcast(trafficStateDescriptor);
 
-		DataStream<EnrichedPricingInput> enrichedStream = demandSupplyStream
+		DataStream<EnrichedPricingInput> enrichedStream = aggregatedDemandSupply
 				.connect(trafficBroadcast)
 				.process(new DemandSupplyEnricher(trafficStateDescriptor));
+
 
 		// ==== Price Calculation ====
 		DataStream<String> priceResult = enrichedStream
