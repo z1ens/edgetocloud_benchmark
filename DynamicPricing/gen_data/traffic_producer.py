@@ -1,8 +1,12 @@
 # traffic_producer.py
-from confluent_kafka import Producer
+from kafka import KafkaProducer
 import time, json, random
 
-p = Producer({'bootstrap.servers': 'localhost:9092'})
+producer = KafkaProducer(
+    bootstrap_servers='localhost:9092',
+    value_serializer=lambda v: json.dumps(v).encode('utf-8')
+)
+
 locations = ['district-1', 'district-2', 'district-3', 'district-4']
 
 def generate_traffic():
@@ -14,6 +18,6 @@ def generate_traffic():
 
 while True:
     data = generate_traffic()
-    p.produce('traffic_info', json.dumps(data))
-    p.poll(0)
-    time.sleep(5)  # slow down the updating rate of each time to sleep
+    producer.send('traffic_info', value=data)
+    producer.flush()
+    time.sleep(5)  # slowly update

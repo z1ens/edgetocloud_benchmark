@@ -1,7 +1,12 @@
-from confluent_kafka import Producer
+from kafka import KafkaProducer
 import uuid, time, random, json
 
-p = Producer({'bootstrap.servers': 'localhost:9092'})
+# initialise Kafka
+producer = KafkaProducer(
+    bootstrap_servers='localhost:9092',
+    value_serializer=lambda v: json.dumps(v).encode('utf-8')
+)
+
 locations = ['district-1', 'district-2', 'district-3', 'district-4']
 
 def generate_driver():
@@ -12,8 +17,9 @@ def generate_driver():
         'timestamp': int(time.time() * 1000)
     }
 
+# continuous flow
 while True:
     data = generate_driver()
-    p.produce('driver_status', json.dumps(data))
-    p.poll(0)
+    producer.send('driver_status', value=data)
+    producer.flush()  # make sure its send
     time.sleep(0.3)

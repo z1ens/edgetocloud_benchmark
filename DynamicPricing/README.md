@@ -17,21 +17,21 @@ The pipeline ingests three streams:
 
 The pipeline performs the following steps:
 
-1. **Parse & Clean** incoming JSON events into POJOs (`RiderRequest`, `DriverStatus`, `TrafficInfo`).
-2. **Real-time Pairwise Matching (Interval Join)**: Rider and Driver streams are key-partitioned by location and matched using `intervalJoin`,
-   allowing for fine-grained many-to-many matching within a configurable time range.
+1. **Parse & Clean** incoming JSON events into POJOs (`RiderRequest`, `DriverStatus`, `TrafficInfo`) using lightweight custom parsers. After parsing, the records pass through stateless map and filter operators to filter out malformed or unavailable events and annotate records with event time. 
+2. **Real-time Pairwise Matching (Interval Join)**: The rider and driver streams are keyed by location and joined using Flink's `intervalJoin` operator over a ±30-second window. This enables fine-grained matching between riders and available drivers within the same region and a realistic time tolerance.
 3. **Event-Time Windowed Aggregation (Post-Join)**: The resulting `DemandSupply` records are grouped by location using a
    `TumblingEventTimeWindow` to compute demand/supply counts over fixed intervals,
    effectively compressing high-volume edge matches into summarized metrics at the cloud layer.
-4. **Broadcast Traffic Info**: Real-time `TrafficInfo` events are broadcast to all downstream subtasks,
+4. **Broadcast Traffic Info**: The output of the interval join is fed into a `TumblingEventTimeWindow (10s)`, where matched (location, demand, supply) records are aggregated: grouped by location
+and reduced to count total rider/driver matches per window.
    and joined with the aggregated `DemandSupply` stream using broadcast state enrichment.
-5. **Price Calculation**: compute final price using the formula:
+5. **Price Calculation**: Each enriched record is processed to compute a final surge price based on:
 
    ```
    price = basePrice * (demand / supply) * nightFactor * trafficFactor
    ```
 
-6. **Sink**: emit computed pricing results as JSON strings to Kafka topic `dynamic_price`.
+6. **Sink**: The result is serialized into JSON and sent to a Kafka sink for downstream processing or monitoring.
 
 ---
 
@@ -98,7 +98,3 @@ The pipeline performs the following steps:
 Apache 2.0
 
 ---
-
-## Acknowledgements
-This project is inspired by Uber's dynamic pricing strategies and is built for research, simulation, and performance benchmarking purposes in edge-to-cloud streaming scenarios.
-

@@ -2,9 +2,13 @@ import json
 import time
 import uuid
 import random
-from confluent_kafka import Producer
+from kafka import KafkaProducer
 
-p = Producer({'bootstrap.servers': 'localhost:9092'})
+producer = KafkaProducer(
+    bootstrap_servers='localhost:9092',
+    value_serializer=lambda v: json.dumps(v).encode('utf-8')
+)
+
 locations = ['district-1', 'district-2', 'district-3', 'district-4']
 
 def generate_rider_request():
@@ -15,20 +19,22 @@ def generate_rider_request():
         'timestamp': int(time.time() * 1000)
     }
 
-    # 5 % of abnormal data (no location)
+    # 5% abnormal data (no location)
     if random.random() < 0.05:
         rider['location'] = None
 
     return rider
 
-def delivery_report(err, msg):
-    if err is not None:
-        print(f"Delivery failed: {err}")
+def delivery_report(record_metadata, exception=None):
+    if exception is not None:
+        print(f"Delivery failed: {exception}")
     else:
-        print(f"Produced message to {msg.topic()} [{msg.partition()}]")
+        print(f"Produced message to {record_metadata.topic} [{record_metadata.partition}]")
 
 while True:
     data = generate_rider_request()
-    p.produce('rider_requests', json.dumps(data), callback=delivery_report)
-    p.poll(0)
-    time.sleep(0.2)  # to control the rate
+    future = producer.send('rider_requests', value=data)
+    future.add_callback(lambda record_metadata: delivery_report(record_metadata))
+    future.add_errback(lambda exc: delivery_report(None, exc))
+    producer.flush()
+    time.sleep(0.2)
