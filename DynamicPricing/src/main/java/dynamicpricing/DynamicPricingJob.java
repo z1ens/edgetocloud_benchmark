@@ -43,7 +43,7 @@ import java.util.Properties;
 public class DynamicPricingJob {
 	public static void main(String[] args) throws Exception {
 		final StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
-		env.disableOperatorChaining(); // if need to unchain the
+		env.disableOperatorChaining(); // if need to unchain the operators comment this line
 
 		ParameterTool parameters = ParameterTool.fromArgs(args);
 		String kafkaBrokers = parameters.get("bootstrap.servers", "localhost:9092");
@@ -94,7 +94,7 @@ public class DynamicPricingJob {
 				.assignTimestampsAndWatermarks(
 						WatermarkStrategy.<RiderRequest>forBoundedOutOfOrderness(Duration.ofSeconds(5))
 								.withTimestampAssigner((event, ts) -> event.getTimestamp())
-				);
+				).slotSharingGroup("rider-group");
 
 		// ==== Driver Stream ====
 		DataStream<DriverStatus> driverStream = env.fromSource(
@@ -106,7 +106,7 @@ public class DynamicPricingJob {
 				.assignTimestampsAndWatermarks(
 						WatermarkStrategy.<DriverStatus>forBoundedOutOfOrderness(Duration.ofSeconds(5))
 								.withTimestampAssigner((event, ts) -> event.getTimestamp())
-				);
+				).slotSharingGroup("driver-group");
 
 		// ==== Traffic Stream ====
 		DataStream<TrafficInfo> trafficStream = env.fromSource(
@@ -118,7 +118,7 @@ public class DynamicPricingJob {
 				.assignTimestampsAndWatermarks(
 						WatermarkStrategy.<TrafficInfo>forBoundedOutOfOrderness(Duration.ofSeconds(5))
 								.withTimestampAssigner((event, ts) -> event.getTimestamp())
-				);
+				).slotSharingGroup("traffic-group");
 
 
 		// ==== Direct Rider & Driver Mapping ====
@@ -172,7 +172,7 @@ public class DynamicPricingJob {
 								a.getDemandCount() + b.getDemandCount(),
 								a.getSupplyCount() + b.getSupplyCount()
 						)
-				);
+				).slotSharingGroup("aggregated-group");
 
 
 
@@ -201,7 +201,7 @@ public class DynamicPricingJob {
 					return String.format(
 							"{\"location\":\"%s\",\"price\":%.2f,\"demand\":%d,\"supply\":%d}",
 							ds.getLocation(), Math.round(finalPrice * 100.0) / 100.0, ds.getDemandCount(), ds.getSupplyCount());
-				});
+				}).slotSharingGroup("enriched-group");
 
 		priceResult.addSink(kafkaSink).name("Kafka Price Sink");
 
