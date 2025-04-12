@@ -47,7 +47,7 @@ public class DynamicPricingJob {
 
 		ParameterTool parameters = ParameterTool.fromArgs(args);
 		String kafkaBrokers = parameters.get("bootstrap.servers", "localhost:9092");
-		int windowSizeSec = parameters.getInt("window-size", 30);
+		int windowSizeSec = parameters.getInt("window-size", 10);
 
 		// ==== Kafka Sources ====
 		KafkaSource<String> riderSource = KafkaSource.<String>builder()

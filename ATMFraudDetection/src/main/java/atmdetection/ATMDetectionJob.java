@@ -20,18 +20,19 @@ package atmdetection;
 
 import org.apache.flink.api.common.eventtime.WatermarkStrategy;
 import org.apache.flink.api.common.serialization.SimpleStringSchema;
+import org.apache.flink.api.java.utils.ParameterTool;
+import org.apache.flink.connector.kafka.source.KafkaSource;
+import org.apache.flink.connector.kafka.source.enumerator.initializer.OffsetsInitializer;
+import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.datastream.KeyedStream;
 import org.apache.flink.streaming.api.datastream.WindowedStream;
-import org.apache.flink.streaming.api.windowing.time.Time;
+import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.streaming.api.windowing.assigners.TumblingEventTimeWindows;
+import org.apache.flink.streaming.api.windowing.time.Time;
 import org.apache.flink.streaming.api.windowing.windows.TimeWindow;
 import org.apache.flink.streaming.connectors.kafka.FlinkKafkaProducer;
-import org.apache.flink.api.java.utils.ParameterTool;
-import org.apache.flink.streaming.api.datastream.DataStream;
-import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
-import org.apache.flink.streaming.connectors.kafka.FlinkKafkaConsumer;
-import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.clients.producer.ProducerConfig;
+
 import java.time.Duration;
 import java.util.Properties;
 
@@ -43,33 +44,34 @@ public class ATMDetectionJob {
 		ParameterTool parameters = ParameterTool.fromArgs(args);
 		String inputTopic = parameters.get("input-topic", "atm-transactions");
 		String outputTopic = parameters.get("output-topic", "atm-alerts");
-		String kafkaBrokers = parameters.get("bootstrap.servers", "localhost:9092"); // If deploy on cloud, change the argument
+		String kafkaBrokers = parameters.get("bootstrap.servers", "localhost:9092");
+		String groupId = parameters.get("group-id", "atm-group");
 		int windowSizeSec = parameters.getInt("window-size", 30);
 
-		Properties kafkaConsumerProps = new Properties();
-		kafkaConsumerProps.setProperty(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, kafkaBrokers);
-		kafkaConsumerProps.setProperty(ConsumerConfig.GROUP_ID_CONFIG, "atm-group");
-		kafkaConsumerProps.setProperty(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest");
+		KafkaSource<String> kafkaSource = KafkaSource.<String>builder()
+				.setBootstrapServers(kafkaBrokers)
+				.setTopics(inputTopic)
+				.setGroupId(groupId)
+				.setStartingOffsets(OffsetsInitializer.latest())
+				.setValueOnlyDeserializer(new SimpleStringSchema())
+				.build();
 
+		DataStream<String> rawStream = env.fromSource(kafkaSource, WatermarkStrategy.noWatermarks(), "Kafka Source");
 		Properties kafkaProducerProps = new Properties();
 		kafkaProducerProps.setProperty(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, kafkaBrokers);
 		kafkaProducerProps.setProperty(ProducerConfig.ACKS_CONFIG, "1");
 		kafkaProducerProps.setProperty(ProducerConfig.RETRIES_CONFIG, "5");
 		kafkaProducerProps.setProperty(ProducerConfig.ENABLE_IDEMPOTENCE_CONFIG, "false");
 
-		FlinkKafkaConsumer<String> kafkaConsumer = new FlinkKafkaConsumer<>(inputTopic, new SimpleStringSchema(), kafkaConsumerProps);
-
-		DataStream<String> rawStream = env.addSource(kafkaConsumer).name("Kafka Source");
-
 		DataStream<ATMTransaction> parsed = rawStream
 				.map(ATMTransactionParser::parse)
-				.filter(txn -> txn != null).name("Map[0]: ATM Transaction");
+				.filter(txn -> txn != null).name("Map[0]: ATM Transaction").slotSharingGroup("parsed-group");
 
 		DataStream<ATMTransaction> filtered = parsed
 				.filter(new AmountThresholdFilter(1000.0)).name("Filter: High Amount");
 
 		DataStream<ATMTransaction> enriched = filtered
-				.map(new FraudScoreEnrichment("http://localhost:5002/predict")).name("Map: Add Fraud Score");
+				.map(new FraudScoreEnrichment("http://10.10.2.61:5002/predict")).name("Map: Add Fraud Score").slotSharingGroup("enriched-group"); // deploy the ML model on the cloud, pass the argument
 
 		DataStream<ATMTransaction> timestamped = enriched.assignTimestampsAndWatermarks(
 				WatermarkStrategy.<ATMTransaction>forBoundedOutOfOrderness(Duration.ofSeconds(5))

@@ -44,7 +44,7 @@ public class SensorAssessmentJob {
 		ParameterTool parameters = ParameterTool.fromArgs(args);
 		String inputTopic = parameters.get("input-topic", "sensor-data");
 		String outputTopic = parameters.get("output-topic", "processed-data");
-		String kafkaBrokers = parameters.get("bootstrap.servers", "10.10.2.61:9092");
+		String kafkaBrokers = parameters.get("bootstrap.servers", "localhost:9092");  // pass the argument when deploy on cloud
 		int threshold = parameters.getInt("temperature-threshold", 50);
 		int windowSizeSec = parameters.getInt("window-size", 30);
 
@@ -123,7 +123,8 @@ public class SensorAssessmentJob {
 					v1.getMoteId(),
 					avg + arr[500] % 5, // add some noise
 					null, null, null);
-		}).name("Window:Complex Aggregation");
+		}).name("Window:Complex Aggregation")
+				.slotSharingGroup("window-group");
 
 		DataStream<String> output = aggregated
 				.map(data -> {
@@ -138,7 +139,8 @@ public class SensorAssessmentJob {
 					}
 
 					return json + " | hash:" + hash;
-				}).name("Map[2]: JSON+Hash");
+				}).name("Map[2]: JSON+Hash")
+				.slotSharingGroup("hashed-group");
 
 		FlinkKafkaProducer<String> kafkaSink = new FlinkKafkaProducer<>(outputTopic, new SimpleStringSchema(), kafkaProducerProps);
 		output.addSink(kafkaSink).name("Kafka Sink");

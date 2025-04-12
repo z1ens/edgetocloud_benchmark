@@ -22,11 +22,11 @@ under the License.
 	<modelVersion>4.0.0</modelVersion>
 
 	<groupId>frauddetection</groupId>
-	<artifactId>fraud-detection</artifactId>
+	<artifactId>frauddetection</artifactId>
 	<version>0.1</version>
 	<packaging>jar</packaging>
 
-	<name>fraud-detection</name>
+	<name>frauddetection</name>
 	<url>https://flink.apache.org</url>
 
 	<properties>
